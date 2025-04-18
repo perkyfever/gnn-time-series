@@ -16,16 +16,15 @@ class TimeSplit:
     """
     Dataset splits based on time.
     """
-
     train: tuple[str, str]
     val: tuple[str, str]
     test: tuple[str, str]
 
 
 ETT_SPLIT = TimeSplit(
-    val=("2017-10-01", "2018-02-01"),
-    test=("2018-02-01", "2018-06-01"),
-    train=("2016-10-01", "2017-10-01"),
+    val=("2017-07-01", "2017-11-01"),
+    test=("2017-11-01", "2018-03-01"),
+    train=("2016-07-01", "2017-07-01"),
 )
 
 DATA_PATH = Path(__file__).parent / "datasets"
@@ -42,7 +41,7 @@ def get_datasets(
     :returns: corresponding Train/Val/Test datasets
     """
     if "ETT" in dataset_name:
-        data = pd.read_csv(DATA_PATH / dataset_name)
+        data = pd.read_csv(DATA_PATH / "ETT-small" / dataset_name)
 
         train_df = data[data.date.between(*ETT_SPLIT.train)].copy()
         train_ds = ETTDataset(
@@ -105,8 +104,7 @@ class ETTDataset(Dataset):
             lambda date: datetime.fromisoformat(date).hour
         )
         dataframe["minute"] = (
-            dataframe["date"].apply(lambda date: datetime.fromisoformat(date).minute)
-            // 15
+            dataframe["date"].apply(lambda date: datetime.fromisoformat(date).minute) // 15
         )  # 15 minutes intervals only
 
         time_values = dataframe[["month", "weekday", "day", "hour", "minute"]].values
