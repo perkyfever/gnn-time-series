@@ -2,23 +2,10 @@ import dgl
 import dgl.nn as dglnn
 
 import torch
-import numpy as np
+from torch import GradScaler, autocast
 
-from ess import ess_adjusted_pvalue_matrix
-
-
-def build_graph(time_series: np.ndarray, alpha: float = 0.05) -> dgl.graph:
-    """
-    Constructs graph of time series components based on alpha confidence level.
-    :param time_series: multivariate time series (n_samples, n_components)
-    :param alpha: confidence level
-    :returns: constructed graph of components
-    """
-    n_components = time_series.shape[1]
-    pvalues_matrix = ess_adjusted_pvalue_matrix(time_series)
-    src_nodes, dst_nodes = np.where(pvalues_matrix <= alpha)
-    return dgl.graph((src_nodes, dst_nodes), num_nodes=n_components)
-
+from tqdm import tqdm
+from utils import seed_everything
 
 def spectral_features(graph: dgl.graph, embed_size: int) -> torch.Tensor:
     """
@@ -33,9 +20,65 @@ def spectral_features(graph: dgl.graph, embed_size: int) -> torch.Tensor:
     eig_vecs = torch.linalg.eigh(L)[1]
     return eig_vecs[:, :embed_size]
     
-
-def deepwalk_features() -> torch.Tensor:
+def deepwalk_features(
+    graph: dgl.graph, device: torch.device,
+    epochs: int, batch_size: int, lr: float, weight_decay: float,
+    embed_size: int, walk_length=60, window_size=7, negative_size=3
+) -> torch.Tensor:
     """
     Computes DeepWalk features.
+    :param graph: graph to process
+    :param device: device for training
+    :param epochs: number of epochs to train
+    :param batch_size: nodes batch size
+    :param lr: learing rate
+    :param weight_decay: optimizer weight decay
+    :param embed_size: size of embeddings
+    :param walk_length: deepwalk length
+    :param window_size: size of context window
+    :param negative_size: negative samples factor
+    :returns: deepwalk node embeddings of shape (num_nodes, embed_size)
     """
-    pass
+    deepwalk = dglnn.DeepWalk(
+        g=graph.cpu(),
+        emb_dim=embed_size,
+        walk_length=walk_length,
+        window_size=window_size,
+        negative_size=negative_size,
+        fast_neg=False,
+        sparse=False
+    )
+
+    loader = torch.utils.data.DataLoader(
+        dataset=torch.arange(graph.num_nodes()),
+        batch_size=batch_size,
+        num_workers=4,
+        shuffle=True,
+        collate_fn=deepwalk.sample,
+        drop_last=True,
+    )
+    
+    deepwalk.train()
+    deepwalk = deepwalk.to(device)
+    optimizer = torch.optim.AdamW(deepwalk.parameters(), lr=lr, weight_decay=weight_decay)
+    
+    seed_everything()
+    scaler = GradScaler()
+    for epoch in range(epochs):
+        pbar = tqdm(loader, leave=False)
+        pbar.set_description(f'epoch = {epoch}')
+        for batch in pbar:
+            optimizer.zero_grad()
+            batch = batch.to(device)
+
+            with autocast(device_type="cuda"):
+                loss = deepwalk(batch)
+    
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            pbar.set_postfix_str(f'loss = {loss.item():.4f}')
+    
+    node_embeds = deepwalk.node_embed.weight.detach().cpu()
+    return node_embeds
+    
