@@ -1,37 +1,33 @@
-import os
 import torch
-
-import numpy as np
 import pandas as pd
 
 from pathlib import Path
 from datetime import datetime
 from dataclasses import dataclass
+
 from torch.utils.data import Dataset
-from sklearn.preprocessing import StandardScaler
-
-
-@dataclass
-class TimeSplit:
-    """
-    Dataset splits based on time.
-    """
-    train: tuple[str, str]
-    val: tuple[str, str]
-    test: tuple[str, str]
-
-
-ETT_SPLIT = TimeSplit(
-    val=("2017-07-01", "2017-11-01"),
-    test=("2017-11-01", "2018-03-01"),
-    train=("2016-07-01", "2017-07-01"),
-)
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
 DATA_PATH = Path(__file__).parent / "datasets"
 
+@dataclass
+class Split:
+    """
+    Dataset split.
+    """
+    train_size: int
+    val_size: int
+    test_size: int
+
+DATASET_SPLITS = {
+    "ETTh": Split(train_size=8640, val_size=2880, test_size=2880),
+    "ETTm": Split(train_size=34560, val_size=11520, test_size=11520)
+}
 
 def get_datasets(
-    dataset_name: str, lookback_size: int, horizon_size: int
+    dataset_name: str,
+    lookback_size: int,
+    horizon_size: int
 ) -> tuple[Dataset, Dataset, Dataset]:
     """
     Utility function to obtain Train/Val/Test datasets.
@@ -41,9 +37,12 @@ def get_datasets(
     :returns: corresponding Train/Val/Test datasets
     """
     if "ETT" in dataset_name:
-        data = pd.read_csv(DATA_PATH / "ETT-small" / dataset_name)
+        start_idx = 0
+        data = pd.read_csv(DATA_PATH / dataset_name)
+        split = DATASET_SPLITS["ETTh"] if "h" in dataset_name else DATASET_SPLITS["ETTm"]
 
-        train_df = data[data.date.between(*ETT_SPLIT.train)].copy()
+        train_slice = slice(start_idx, start_idx + split.train_size)
+        train_df = data.loc[train_slice].copy()
         train_ds = ETTDataset(
             dataframe=train_df,
             lookback_size=lookback_size,
@@ -51,7 +50,9 @@ def get_datasets(
             scaler=None,
         )
 
-        val_df = data[data.date.between(*ETT_SPLIT.val)].copy()
+        start_idx += split.train_size
+        val_slice = slice(start_idx, start_idx + split.val_size)
+        val_df = data.loc[val_slice].copy()
         val_ds = ETTDataset(
             dataframe=val_df,
             lookback_size=lookback_size,
@@ -59,7 +60,9 @@ def get_datasets(
             scaler=train_ds.scaler,
         )
 
-        test_df = data[data.date.between(*ETT_SPLIT.test)].copy()
+        start_idx += split.val_size
+        test_slice = slice(start_idx, start_idx + split.test_size)
+        test_df = data.loc[test_slice].copy()
         test_ds = ETTDataset(
             dataframe=test_df,
             lookback_size=lookback_size,
@@ -78,13 +81,14 @@ class ETTDataset(Dataset):
         dataframe: pd.DataFrame,
         lookback_size: int,
         horizon_size: int,
-        scaler: StandardScaler | None,
+        scaler: StandardScaler | None
     ):
         """
         Electricity Transformer Temperature dataset.
         :param dataframe: dataframe containing time series data
         :param lookback_size: history window length used for model input
         :param horizon_size: horizon window length to forecast
+        :param scaler: data scaler
         """
         super().__init__()
         self.horizon_size = horizon_size
@@ -106,29 +110,34 @@ class ETTDataset(Dataset):
         dataframe["minute"] = (
             dataframe["date"].apply(lambda date: datetime.fromisoformat(date).minute) // 15
         )  # 15 minutes intervals only
-
-        time_values = dataframe[["month", "weekday", "day", "hour", "minute"]].values
-        data_values = dataframe[
-            ["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"]
-        ].values
+        
+        ohe = OneHotEncoder()
+        time_values = dataframe[["month", "weekday", "day", "hour", "minute"]]
+        self.time_values = ohe.fit_transform(time_values).toarray()
+        
+        self.x_values = dataframe[["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"]].values
+        self.y_values = dataframe[["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"]].values
+        self.target_idx = -1
 
         if scaler is None:
             self.scaler = StandardScaler()
-            data_values = self.scaler.fit_transform(data_values)
+            self.x_values = self.scaler.fit_transform(self.x_values)
         else:
             self.scaler = scaler
-            data_values = self.scaler.transform(data_values)
+            self.x_values = self.scaler.transform(self.x_values)
 
-        self.time_values = torch.tensor(data=time_values, dtype=torch.long)
-        self.data_values = torch.tensor(data=data_values, dtype=torch.float32)
+        self.x_values = torch.tensor(self.x_values, dtype=torch.float32)
+        self.y_values = torch.tensor(self.y_values, dtype=torch.float32)
+        self.time_values = torch.tensor(self.time_values, dtype=torch.float32)
 
     def __len__(self) -> int:
-        return max(0, self.time_values.shape[0] - self.window_size + 1)
+        return max(0, self.x_values.shape[0] - self.window_size + 1)
 
     def __getitem__(self, idx) -> tuple[torch.Tensor, torch.Tensor]:
-        start_idx = idx
-        x_slice = slice(start_idx, start_idx + self.lookback_size)
-        x_time, x_data = self.time_values[x_slice], self.data_values[x_slice]
-        y_slice = slice(start_idx + self.lookback_size, start_idx + self.window_size)
-        _, y_data = self.time_values[y_slice], self.data_values[y_slice]
-        return x_time, x_data, y_data
+        x_slice = slice(idx, idx + self.lookback_size)
+        x_sample = torch.cat([self.x_values[x_slice, :], self.time_values[x_slice, :]], dim=1)
+
+        y_slice = slice(idx + self.lookback_size, idx + self.window_size)
+        y_sample = self.y_values[y_slice, self.target_idx]
+        
+        return x_sample, y_sample
