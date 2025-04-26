@@ -27,8 +27,8 @@ def train_step(train_loader, model, optimizer, loss_fn, device):
         scaler.update()
 
         batch_size = targets.shape[0]
-        mse_acum += mse.item()
-        mae_acum += mae.item()
+        mse_acum += mse.item() / targets.shape[1]
+        mae_acum += mae.item() / targets.shape[1]
         samples_cnt += batch_size
 
     return {
@@ -52,8 +52,8 @@ def evaluation_step(loader, model, device):
         mse = F.mse_loss(outputs, targets, reduction="sum")
 
         batch_size = targets.shape[0]
-        mse_acum += mse.item()
-        mae_acum += mae.item()
+        mse_acum += mse.item() / targets.shape[1]
+        mae_acum += mae.item() / targets.shape[1]
         samples_cnt += batch_size
 
     return {

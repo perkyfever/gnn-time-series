@@ -48,6 +48,7 @@ def get_datasets(
             lookback_size=lookback_size,
             horizon_size=horizon_size,
             scaler=None,
+            ohe=None,
         )
 
         start_idx += split.train_size
@@ -58,6 +59,7 @@ def get_datasets(
             lookback_size=lookback_size,
             horizon_size=horizon_size,
             scaler=train_ds.scaler,
+            ohe=train_ds.ohe,
         )
 
         start_idx += split.val_size
@@ -68,6 +70,7 @@ def get_datasets(
             lookback_size=lookback_size,
             horizon_size=horizon_size,
             scaler=train_ds.scaler,
+            ohe=train_ds.ohe,
         )
 
         return train_ds, val_ds, test_ds
@@ -81,7 +84,8 @@ class ETTDataset(Dataset):
         dataframe: pd.DataFrame,
         lookback_size: int,
         horizon_size: int,
-        scaler: StandardScaler | None
+        scaler: StandardScaler | None,
+        ohe: OneHotEncoder | None = None,
     ):
         """
         Electricity Transformer Temperature dataset.
@@ -89,6 +93,7 @@ class ETTDataset(Dataset):
         :param lookback_size: history window length used for model input
         :param horizon_size: horizon window length to forecast
         :param scaler: data scaler
+        :param ohe: OneHotEncoder
         """
         super().__init__()
         self.horizon_size = horizon_size
@@ -111,9 +116,14 @@ class ETTDataset(Dataset):
             dataframe["date"].apply(lambda date: datetime.fromisoformat(date).minute) // 15
         )  # 15 minutes intervals only
         
-        ohe = OneHotEncoder()
         time_values = dataframe[["month", "weekday", "day", "hour", "minute"]]
-        self.time_values = ohe.fit_transform(time_values).toarray()
+
+        if ohe is None:
+            self.ohe = OneHotEncoder()
+            self.time_values = self.ohe.fit_transform(time_values).toarray()
+        else:
+            self.ohe = ohe
+            self.time_values = self.ohe.transform(time_values).toarray()
         
         self.x_values = dataframe[["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"]].values
         self.y_values = dataframe[["HUFL", "HULL", "MUFL", "MULL", "LUFL", "LULL", "OT"]].values
