@@ -7,13 +7,15 @@ class GATv2Block(nn.Module):
         input_dim: int,
         hidden_dim: int,
         num_heads: int,
-        activation: nn.Module,
+        activation_fn: nn.Module,
+        dropout: float,
     ):
         super().__init__()
         self.num_heads = num_heads
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        self.activation = activation
+        self.activation = activation_fn
+        self.dropout = dropout
 
         assert self.hidden_dim % self.num_heads == 0
         output_dim = self.hidden_dim // self.num_heads
@@ -24,6 +26,7 @@ class GATv2Block(nn.Module):
             out_feats=output_dim,
             num_heads=self.num_heads,
             activation=self.activation(),
+            feat_drop=dropout,
             residual=True
         )
         self.Wo = nn.Linear(self.hidden_dim, self.hidden_dim)
@@ -41,14 +44,16 @@ class GATv2Model(nn.Module):
         hidden_dim: int,
         num_layers: int,
         num_heads: int,
-        activation: nn.Module,
+        activation_fn: nn.Module,
+        dropout: float
     ):
         super().__init__()
         self.num_heads = num_heads
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.activation = activation
+        self.activation_fn = activation_fn
+        self.dropout = dropout
 
         self.blocks = nn.ModuleList()
         for i in range(num_layers):
@@ -56,7 +61,8 @@ class GATv2Model(nn.Module):
                 input_dim=self.input_dim if i == 0 else self.hidden_dim,
                 hidden_dim=self.hidden_dim,
                 num_heads=self.num_heads,
-                activation=self.activation,
+                activation_fn=self.activation_fn,
+                dropout=dropout
             ))
     
     def forward(self, graph, features):
