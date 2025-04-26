@@ -135,12 +135,11 @@ class ETTDataset(Dataset):
 
     def __getitem__(self, idx) -> tuple[torch.Tensor, torch.Tensor]:
         x_slice = slice(idx, idx + self.lookback_size)
-        x_sample = torch.cat([
-            self.x_values[x_slice, :],
-            self.time_values[idx + self.lookback_size - 1].repeat(self.lookback_size, 1)
-        ], dim=1)
+        x_sample = self.x_values[x_slice, :]
+        
+        time_values = self.time_values[idx + self.lookback_size - 1, :]
 
         y_slice = slice(idx + self.lookback_size, idx + self.window_size)
         y_sample = self.y_values[y_slice, self.target_idx]
         
-        return x_sample, y_sample
+        return x_sample, time_values, y_sample
